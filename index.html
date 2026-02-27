@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Dual Relay Control</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #1f1f1f, #111);
+            color: white;
+            text-align: center;
+        }
+
+        h1 { margin-top: 20px; }
+
+        .container {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 20px;
+        }
+
+        .card {
+            background: #222;
+            padding: 20px;
+            border-radius: 15px;
+            width: 200px;
+            box-shadow: 0 0 20px rgba(0,255,150,0.2);
+        }
+
+        button {
+            width: 120px;
+            height: 45px;
+            margin: 10px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+
+        .on { background: #00c853; color: white; }
+        .off { background: #d50000; color: white; }
+
+        button:hover { transform: scale(1.05); }
+
+        video, canvas {
+            margin-top: 20px;
+            transform: scaleX(-1);
+            border-radius: 10px;
+        }
+
+        #gestureStatus {
+            margin-top: 10px;
+            font-size: 18px;
+            color: #00ff99;
+        }
+    </style>
+</head>
+<body>
+
+<h1>AI Gesture Dual Relay Control</h1>
+
+<div class="container">
+    <div class="card">
+        <h3>Relay 1</h3>
+        <button class="on" onclick="relay1On()">ON</button>
+        <button class="off" onclick="relay1Off()">OFF</button>
+    </div>
+
+    <div class="card">
+        <h3>Relay 2</h3>
+        <button class="on" onclick="relay2On()">ON</button>
+        <button class="off" onclick="relay2Off()">OFF</button>
+    </div>
+</div>
+
+<p id="gestureStatus">Gesture: None</p>
+
+<video id="video" autoplay playsinline muted width="640" height="480"></video>
+<canvas id="canvas" width="640" height="480"></canvas>
+
+<script type="module">
+import {
+  FilesetResolver,
+  HandLandmarker,
+  DrawingUtils
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+const ESP32_IP = "10.229.204.199";
+
+
+window.relay1On = function(){
+    fetch(`http://${ESP32_IP}/relay1on`);
+}
+window.relay1Off = function(){
+    fetch(`http://${ESP32_IP}/relay1off`);
+}
+window.relay2On = function(){
+    fetch(`http://${ESP32_IP}/relay2on`);
+}
+window.relay2Off = function(){
+    fetch(`http://${ESP32_IP}/relay2off`);
+}
+window.allOn = function(){
+    fetch(`http://${ESP32_IP}/allon`);
+}
+window.allOff = function(){
+    fetch(`http://${ESP32_IP}/alloff`);
+}
+
+//Gesture Detection 
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const status = document.getElementById("gestureStatus");
+
+function fingerUp(l, tip, pip){
+    return l[tip].y < l[pip].y;
+}
+
+function isClosedFist(l){
+    return !fingerUp(l,8,6) && !fingerUp(l,12,10) &&
+           !fingerUp(l,16,14) && !fingerUp(l,20,18);
+}
+
+function isOpenPalm(l){
+    return fingerUp(l,8,6) && fingerUp(l,12,10) &&
+           fingerUp(l,16,14) && fingerUp(l,20,18);
+}
+
+const vision = await FilesetResolver.forVisionTasks(
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+);
+
+const handLandmarker = await HandLandmarker.createFromOptions(vision, {
+  baseOptions: {
+    modelAssetPath:
+      "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+  },
+  runningMode: "VIDEO",
+  numHands: 1
+});
+
+const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+video.srcObject = stream;
+await new Promise(resolve => video.onloadedmetadata = resolve);
+
+const draw = new DrawingUtils(ctx);
+
+function loop(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+    const results = handLandmarker.detectForVideo(video, performance.now());
+
+    if(results.landmarks){
+        for(const l of results.landmarks){
+
+            draw.drawConnectors(l, HandLandmarker.HAND_CONNECTIONS);
+            draw.drawLandmarks(l);
+
+            const indexUp = fingerUp(l,8,6);
+            const middleUp = fingerUp(l,12,10);
+
+            if(isOpenPalm(l)){
+                status.innerText = "Gesture: Open Palm (All ON)";
+                allOn();
+            }
+            else if(isClosedFist(l)){
+                status.innerText = "Gesture: Closed Fist (All OFF)";
+                allOff();
+            }
+            else if(indexUp && !middleUp){
+                status.innerText = "Gesture: One Finger (Relay1 ON)";
+                relay1On();
+            }
+            else if(indexUp && middleUp){
+                status.innerText = "Gesture: Two Fingers (Relay2 ON)";
+                relay2On();
+            }
+            else if(!indexUp && middleUp){
+                status.innerText = "Gesture: Index Down (Relay1 OFF)";
+                relay1Off();
+            }
+        }
+    }
+
+    requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+
+</body>
+</html>
